@@ -8,11 +8,11 @@ theme_reach <- function() {
   theme_fivethirtyeight() +
     theme(
       legend.position = "none",
-      plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
-      plot.subtitle = element_text(size = 16, hjust = 0.5),
-      axis.title.x = element_text(size=17),
-      axis.title.y = element_text(size=17),
-      axis.text = element_text(size = 15)
+      plot.title = element_text(size = 24, hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(size = 18, hjust = 0.5),
+      axis.title.x = element_text(size=20),
+      axis.title.y = element_text(size=20),
+      axis.text = element_text(size = 17)
     )
 }
 
@@ -57,8 +57,7 @@ pbp_21 |>
        caption = "Based on Eric Eager's graph on PFF.com") +
   geom_text(aes(label = paste0(round(100*freq, 1), "%"), y = ifelse(epa > 0, -0.05, 0.05)), size = 6) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
-  theme_reach() +
-  theme(axis.text.x = element_text(size = 16))
+  theme_reach()
 ggsave('data-viz/type_of_pressure.png', width = 14, height = 10, dpi = "retina")
 
 feature_importance |> 
@@ -132,8 +131,6 @@ top_15 <- sacks_preds |>
   tab_header(title = "Sacks Over Expected Leaders",
              subtitle = "Weeks 1-8 of 2021")
 gtsave(top_15, "data-viz/top_15.png")
-
-
 
 sacks_oe <- sacks_preds |> 
   group_by(displayName, nflId, officialPosition) |> 
