@@ -3,6 +3,7 @@ library(nflfastR)
 library(ggthemes)
 library(gt)
 library(ggridges)
+library(ggimage)
 
 theme_reach <- function() {
   theme_fivethirtyeight() +
@@ -62,12 +63,13 @@ ggsave('data-viz/type_of_pressure.png', width = 14, height = 10, dpi = "retina")
 
 feature_importance |> 
   mutate(imp = `...1`, label = `0`) |> 
+  filter(imp > 0.01) |> 
   ggplot(aes(x = imp, y = fct_reorder(label, imp))) +
   geom_bar(aes(fill = imp), stat = "identity", alpha = 0.8) +
   labs(x = "Importance",
        y = "Label",
        title = "XGBClassifier Feature Importance",
-       subtitle="On a scale of 0-1") +
+       subtitle="Features with a 0.01 importance or greater shown (on a scale of 0-1)") +
   scale_fill_viridis_c()+
   theme_reach() +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) +
@@ -100,7 +102,7 @@ sacks_preds |>
   theme_reach()
 ggsave('data-viz/sack-ridges.png', width = 14, height = 10, dpi = "retina")
 
-headshot <- nflreadr::load_rosters() |> 
+headshot <- nflreadr::load_rosters(2021) |> 
   dplyr::select(gsis_it_id, headshot_url)
 headshot$gsis_it_id <- as.double(headshot$gsis_it_id)
 
@@ -132,12 +134,116 @@ top_15 <- sacks_preds |>
              subtitle = "Weeks 1-8 of 2021")
 gtsave(top_15, "data-viz/top_15.png")
 
+defenses <- plays |> 
+  dplyr::select(gameId, playId, defensiveTeam)
+
 sacks_oe <- sacks_preds |> 
+  left_join(defenses, by = c("gameId", "playId")) |> 
   group_by(displayName, nflId, officialPosition) |> 
   summarize(snaps = n(),
-            sacks = sum(pff_sack),
-            exp_sacks = sum(sack_pred, na.rm = T),
-            sacks_oe = sum(sacks_oe, na.rm = T))
+            team = first(defensiveTeam),
+            sacks = mean(pff_sack),
+            exp_sacks = mean(sack_pred, na.rm = T),
+            sacks_oe = sum(sacks_oe, na.rm = T)) |> 
+  filter(snaps >= 200) |> 
+  left_join(teams_colors_logos, by = c("team" = "team_abbr"))
 
+sacks_oe |> 
+  ggplot(aes(x = exp_sacks, y = sacks)) + 
+  geom_hline(yintercept = mean(sacks_oe$sacks), linetype = "dashed") +
+  geom_vline(xintercept = mean(sacks_oe$exp_sacks), linetype = "dashed") +
+  geom_point(aes(fill = team_color2, color = team_color, size = snaps), 
+             alpha = 0.9, shape = 21) +
+  scale_color_identity(aesthetics = c("fill", "color")) +
+  geom_smooth(method = "lm", se = FALSE, color = "gray", size = 1.5) +
+  ggrepel::geom_text_repel(aes(label = displayName), size = 5) +
+  labs(x = "Expected Sacks Per Snap",
+       y = "Sacks Per Snap",
+       title = "How Expected Sacks and Sacks are Correlated",
+       subtitle = "Minimum of 200 snaps in weeks 1-8 of 2021, bubble size is amount of snaps") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  theme_reach()
+ggsave('data-viz/exp-actual-sacks.png', width = 14, height = 10, dpi = "retina")
+
+team_sacks_oe <- sacks_preds |> 
+  left_join(defenses, by = c("gameId", "playId")) |> 
+  group_by(defensiveTeam) |> 
+  summarize(sacks = sum(pff_sack),
+            exp_sacks = sum(sack_pred, na.rm = T),
+            sacks_oe = sum(sacks_oe, na.rm = T)) |> 
+  left_join(teams_colors_logos, by = c("defensiveTeam" = "team_abbr"))
+
+team_sacks_oe |> 
+  ggplot(aes(x = exp_sacks, y = sacks)) +
+  geom_hline(yintercept = mean(team_sacks_oe$sacks), linetype = "dashed", alpha = 0.5) +
+  geom_vline(xintercept = mean(team_sacks_oe$exp_sacks), linetype = "dashed", alpha = 0.5) +
+  geom_image(aes(image = team_logo_espn), asp = 16/9, size = 0.05) +
+  geom_smooth(method = "lm", se = FALSE, color = "gray", size = 1.5) +
+  labs(x = "Expected Sacks",
+       y = "Actual Sacks",
+       title = "Expected Sacks and Actual Sacks on the Team Level",
+       subtitle = "Weeks 1-8 of the 2021 season") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  theme_reach()
+ggsave('data-viz/team-sacks.png', width = 14, height = 10, dpi = "retina")
+
+calibration <- sacks_preds |> 
+  filter(!is.na(sack_pred)) |> 
+  mutate(
+    bin_pred_prob = round(sack_pred / 0.01) * .01,
+  ) |> 
+  group_by(bin_pred_prob) |> 
+  summarize(
+    n_plays = n(),
+    n_sack = length(which(pff_sack == 1)),
+    bin_actual_prob = n_sack / n_plays
+  )
+
+weeks <- pbp_21 |> 
+  dplyr::select(old_game_id, play_id, week)
+
+weeks$old_game_id <- as.double(weeks$old_game_id)
+
+stability <- sacks_preds |> 
+  left_join(weeks, by = c("gameId" = "old_game_id", "playId" = "play_id")) |> 
+  left_join(defenses, by = c("gameId", "playId")) |> 
+  mutate(week_label = ifelse(week < 5, "weeks_1_4", "weeks_5_8")) |> 
+  group_by(displayName, week_label) |> 
+  summarize(snaps = n(),
+            team = first(defensiveTeam),
+            sacks = mean(pff_sack),
+            exp_sacks = mean(sack_pred, na.rm = T),
+            sacks_oe = sum(sacks_oe, na.rm = T)) |> 
+  pivot_wider(
+    id_cols = c(displayName, team),
+    names_from = week_label,
+    values_from = c(snaps, sacks, exp_sacks, sacks_oe)) |> 
+  mutate(total_snaps = snaps_weeks_1_4 + snaps_weeks_5_8) |> 
+  filter(total_snaps >= 200) |> 
+  left_join(teams_colors_logos, by = c("team" = "team_abbr"))
+
+summary(lm(sacks_weeks_5_8 ~ sacks_weeks_1_4, data = stability))$r.squared # 0.41
+summary(lm(exp_sacks_weeks_5_8 ~ exp_sacks_weeks_1_4, data = stability))$r.squared # 0.00
+summary(lm(sacks_oe_weeks_5_8 ~ sacks_oe_weeks_1_4, data = stability))$r.squared # 0.24
+
+stability |> 
+  ggplot(aes(x = sacks_oe_weeks_1_4, y = sacks_oe_weeks_5_8)) +
+  geom_hline(yintercept = mean(stability$sacks_oe_weeks_5_8), linetype = "dashed") +
+  geom_vline(xintercept = mean(stability$sacks_oe_weeks_1_4), linetype = "dashed") +
+  geom_point(aes(fill = team_color2, color = team_color), 
+             alpha = 0.9, shape = 21, size = 4) +
+  scale_color_identity(aesthetics = c("fill", "color")) +
+  geom_smooth(method = "lm", se = FALSE, color = "gray", size = 1.5) +
+  ggrepel::geom_text_repel(aes(label = displayName), size = 5, max.overlaps = 3) +
+  labs(x = "Sacks Over Expected Weeks 1-4",
+       y = "Sacks Over Expected Weeks 5-8",
+       title = "How Stable Sacks Over Expected are From Weeks 1-4 to Weeks 5-8",
+       subtitle = "Minimum of 200 snaps in weeks 1-8 of 2021, bubble size is amount of snaps") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  theme_reach()
+ggsave('data-viz/stable.png', width = 14, height = 10, dpi = "retina")
 
 
